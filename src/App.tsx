@@ -43,6 +43,191 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState('');
   const [generationTime, setGenerationTime] = useState('');
   const [detectedCity, setDetectedCity] = useState('Maracaí');
+  
+  // Paradise PIX transaction states
+  const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
+  const [clientName, setClientName] = useState('');
+  const [clientPhone, setClientPhone] = useState('');
+  const [isCreatingTransaction, setIsCreatingTransaction] = useState(false);
+  const [transactionData, setTransactionData] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
+  const [paymentStatus, setPaymentStatus] = useState<'pending' | 'approved' | 'failed'>('pending');
+  const [timeLeft, setTimeLeft] = useState(900); // 15 minutes (900 seconds)
+  const [savedScrollPosition, setSavedScrollPosition] = useState(0);
+
+  // Timer effect for PIX expiration
+  useEffect(() => {
+    if (!transactionData || paymentStatus !== 'pending') return;
+    setTimeLeft(900); // Reset timer
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [transactionData, paymentStatus]);
+
+  // Handle open checkout flow
+  const handleOpenCheckout = () => {
+    // Save current scroll position before opening the checkout flow
+    const mainContainer = document.getElementById('main-scroll-container');
+    const currentScroll = mainContainer ? mainContainer.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0);
+    setSavedScrollPosition(currentScroll);
+
+    setClientPhone('');
+    setIsCheckoutModalOpen(true);
+
+    // Scroll window and containers instantly to the top
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (mainContainer) {
+      mainContainer.scrollTop = 0;
+    }
+    const appContainer = document.getElementById('app-container');
+    if (appContainer) {
+      appContainer.scrollTop = 0;
+    }
+  };
+
+  // Handle close checkout flow restoring position
+  const handleCloseCheckout = () => {
+    setIsCheckoutModalOpen(false);
+    setTransactionData(null);
+    
+    // Restore the scroll position back to where the user was
+    setTimeout(() => {
+      window.scrollTo({ top: savedScrollPosition, behavior: 'instant' });
+      const mainContainer = document.getElementById('main-scroll-container');
+      if (mainContainer) {
+        mainContainer.scrollTop = savedScrollPosition;
+      }
+      const appContainer = document.getElementById('app-container');
+      if (appContainer) {
+        appContainer.scrollTop = savedScrollPosition;
+      }
+    }, 50);
+  };
+
+  // Submit and create real/mock PIX transaction
+  const handleCreateTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Validations
+    if (!clientName.trim() || clientName.trim().split(' ').length < 2) {
+      triggerToast('Por favor, digite seu nome completo.');
+      return;
+    }
+
+    const cleanPhone = clientPhone.replace(/[^\d]/g, '');
+    if (cleanPhone.length < 10) {
+      triggerToast('Telefone inválido com DDD.');
+      return;
+    }
+
+    setIsCreatingTransaction(true);
+
+    try {
+      const response = await fetch('/api/create-transaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          customer: {
+            name: clientName,
+            phone: cleanPhone
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro do servidor ao gerar cobrança PIX.');
+      }
+
+      const data = await response.json();
+      setTransactionData(data);
+      setPaymentStatus('pending');
+      
+      if (data.message) {
+        triggerToast(data.message);
+      }
+    } catch (err: any) {
+      console.error(err);
+      triggerToast(err.message || 'Falha ao conectar com o servidor.');
+    } finally {
+      setIsCreatingTransaction(false);
+    }
+  };
+
+  // Polling for real payment status or simulator for testing
+  useEffect(() => {
+    if (!transactionData || paymentStatus !== 'pending') return;
+
+    let intervalId: any;
+
+    if (transactionData.mock) {
+      // For mock preview transactions, auto-approve after 12 seconds for seamless demo
+      intervalId = setTimeout(() => {
+        setPaymentStatus('approved');
+        triggerToast('Pagamento simulação aprovado com sucesso!');
+        setTimeout(() => {
+          window.location.href = 'https://www.test.com';
+        }, 2500);
+      }, 12000);
+    } else {
+      // Real payment polling from backend proxy
+      const poll = async () => {
+        try {
+          const res = await fetch(`/api/check-transaction/${transactionData.transaction_id}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.status === 'approved') {
+              setPaymentStatus('approved');
+              triggerToast('Pagamento confirmado! Redirecionando...');
+              setTimeout(() => {
+                window.location.href = 'https://www.test.com';
+              }, 2500);
+            } else if (data.status === 'failed') {
+              setPaymentStatus('failed');
+            }
+          }
+        } catch (err) {
+          console.error('Polling error:', err);
+        }
+      };
+
+      // Poll immediately then every 4 seconds
+      poll();
+      intervalId = setInterval(poll, 4000);
+    }
+
+    return () => {
+      if (transactionData.mock) {
+        clearTimeout(intervalId);
+      } else {
+        clearInterval(intervalId);
+      }
+    };
+  }, [transactionData, paymentStatus]);
+
+  const handleCopyPIX = () => {
+    if (!transactionData?.qr_code) return;
+    navigator.clipboard.writeText(transactionData.qr_code);
+    setCopied(true);
+    triggerToast('Código PIX copiado com sucesso!');
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleSimulateApproval = () => {
+    setPaymentStatus('approved');
+    triggerToast('Simulando aprovação de pagamento...');
+    setTimeout(() => {
+      window.location.href = 'https://www.test.com';
+    }, 2500);
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
 
   useEffect(() => {
     // Try silent IP-based geolocating first for smooth and reliable user experience
@@ -204,20 +389,18 @@ export default function App() {
         </span>
         <div className="flex items-baseline text-[#4cb857] font-black">
           <span className="text-2xl mr-1">R$</span>
-          <span className="text-5xl tracking-tight">27</span>
-          <span className="text-xl ml-1">,00</span>
+          <span className="text-5xl tracking-tight">19</span>
+          <span className="text-xl ml-1">,90</span>
         </div>
       </div>
 
-      <a 
-        href="https://www.test.com" 
-        target="_blank" 
-        rel="noopener noreferrer" 
-        className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-extrabold py-4 px-6 rounded-2xl transition-all shadow-lg shadow-[#59ca64]/30 hover:shadow-xl hover:shadow-[#59ca64]/40 flex items-center justify-center gap-2 text-base active:scale-95 duration-150 cursor-pointer"
+      <button 
+        onClick={handleOpenCheckout}
+        className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-extrabold py-4 px-6 rounded-2xl transition-all shadow-lg shadow-[#59ca64]/30 hover:shadow-xl hover:shadow-[#59ca64]/40 flex items-center justify-center gap-2 text-base active:scale-95 duration-150 cursor-pointer border-0"
       >
         <Unlock className="w-5 h-5" />
         DESBLOQUEAR ACESSO AGORA
-      </a>
+      </button>
 
       <div className="grid grid-cols-2 gap-2 w-full mt-5">
         <div className="bg-[#f4faf5] border border-[#e3f4e6] rounded-xl py-2 px-3 flex items-center justify-center gap-1.5">
@@ -246,52 +429,289 @@ export default function App() {
   );
 
   return (
-    <div id="app-container" className="min-h-screen bg-[#f4f6f8] flex justify-center items-start overflow-y-auto font-sans antialiased text-slate-800">
+    <div id="app-container" className="min-h-screen bg-[#f4f6f8] flex justify-center items-start overflow-y-auto font-sans antialiased text-slate-800 py-0 md:py-10">
       
-      {/* Simulation Smartphone Container (Mobile First wrapper for desktop) */}
-      <div id="smartphone-frame" className="w-full max-w-md min-h-screen md:min-h-[850px] md:my-6 md:rounded-[40px] md:shadow-2xl md:border-8 md:border-slate-800 bg-[#f4f6f8] relative overflow-hidden flex flex-col justify-between transition-all">
+      {/* Container representing the main web layout - no mobile outer shell, border, or phone frame */}
+      <div 
+        id="main-content-card" 
+        className={`w-full max-w-xl bg-[#fafcfd] md:rounded-3xl md:shadow-lg border border-[#eef2f6] relative overflow-hidden flex flex-col justify-between transition-all ${
+          isCheckoutModalOpen ? 'min-h-0 h-auto shadow-xl' : 'min-h-screen md:min-h-[850px]'
+        }`}
+      >
         
-        {/* Dynamic header depending on the step */}
-        {step === 'results' && (
-          <header className="bg-[#141724] border-b border-[#212638] py-4 px-5 flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
-            <span className="text-white font-extrabold text-sm tracking-widest uppercase">ZapRadar Relatório Secreto</span>
-          </header>
-        )}
+        {isCheckoutModalOpen ? (
+          /* PARADISE PIX SECURE CHECKOUT - SEPARATE FULL VIEW (OUTRA ABA FORA DO RELATÓRIO) */
+          <div className="w-full bg-[#fafcfd] flex flex-col text-[#111e2e] animate-in fade-in duration-300">
+            {/* Header of Checkout */}
+            <header className="bg-[#111e2e] py-4.5 px-5 flex items-center justify-between text-white border-b border-[#212638] flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-[#4cb857]" />
+                <span className="font-extrabold text-xs tracking-wide uppercase">DADOS DE FATURAMENTO</span>
+              </div>
+              <button 
+                type="button"
+                onClick={handleCloseCheckout}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors text-white font-bold text-base cursor-pointer"
+                title="Voltar ao Relatório"
+              >
+                ✕
+              </button>
+            </header>
 
-        {/* Content Wrapper */}
-        <main className="flex-1 p-5 overflow-y-auto">
+            {/* Outer Wrapper with no artificial height */}
+            <div className="w-full flex justify-center">
+              {/* Billing details view container - fits the form exactly */}
+              <div className="max-w-md p-5 w-full">
+                
+                {!transactionData ? (
+                  /* STEP 1: BILLING DETAILS FORM */
+                  <form onSubmit={handleCreateTransaction} className="flex flex-col gap-4 text-left">
+                    
+                    <div className="text-center py-1">
+                      <div className="inline-flex items-center gap-1 bg-[#eefaf0] border border-[#c0ebd1] text-[#367c3f] px-3 py-1 rounded-full text-xs font-bold mb-2">
+                        ⚡ Desconto Ativo: 72% OFF
+                      </div>
+                      <h2 className="text-lg font-extrabold text-[#111e2e]">Dados de Faturamento</h2>
+                      <p className="text-slate-500 text-xs mt-1 leading-relaxed">
+                        Preencha os dados abaixo para gerar o seu QR Code PIX de forma segura e imediata.
+                      </p>
+                    </div>
+
+                    {/* Summary Box */}
+                    <div className="bg-white border border-[#edf3f8] rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                      <div className="text-left">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">PRODUTO</p>
+                        <h4 className="text-sm font-black text-[#111e2e]">ZapRadar Acesso Vitalício</h4>
+                        <p className="text-[11px] text-[#4cb857] font-bold mt-0.5">Incluso: Relatório + Fotos + Localização</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-red-500 line-through font-semibold">R$ 99,00</p>
+                        <p className="text-xl font-black text-[#4cb857]">R$ 19,90</p>
+                      </div>
+                    </div>
+
+                    {/* Customer Form Inputs */}
+                    <div className="flex flex-col gap-3">
+                      
+                      {/* Name Input */}
+                      <div>
+                        <label className="block text-slate-500 text-[10px] font-bold uppercase mb-1 pl-1">Nome Completo</label>
+                        <input
+                          type="text"
+                          required
+                          value={clientName}
+                          onChange={(e) => setClientName(e.target.value)}
+                          placeholder="Digite seu nome completo"
+                          className="w-full bg-white border border-[#edf3f8] rounded-2xl py-3 px-4 text-sm font-semibold outline-none focus:border-[#59ca64] focus:ring-1 focus:ring-[#59ca64] transition-all shadow-sm"
+                        />
+                      </div>
+
+                      {/* Phone Input */}
+                      <div>
+                        <label className="block text-slate-500 text-[10px] font-bold uppercase mb-1 pl-1">WhatsApp de Contato</label>
+                        <input
+                          type="tel"
+                          required
+                          value={clientPhone}
+                          onChange={(e) => setClientPhone(formatPhoneNumber(e.target.value))}
+                          placeholder="(11) 99999-9999"
+                          className="w-full bg-white border border-[#edf3f8] rounded-2xl py-3 px-4 text-sm font-semibold outline-none focus:border-[#59ca64] focus:ring-1 focus:ring-[#59ca64] transition-all shadow-sm"
+                        />
+                      </div>
+
+                    </div>
+
+                    {/* Submit Button */}
+                    <button
+                      type="submit"
+                      disabled={isCreatingTransaction}
+                      className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-extrabold py-3.5 px-6 rounded-2xl transition-all shadow-lg shadow-[#59ca64]/20 flex items-center justify-center gap-2 text-sm mt-2 cursor-pointer disabled:opacity-50 border-0"
+                    >
+                      {isCreatingTransaction ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          GERANDO SEU PIX...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-5 h-5 stroke-[3]" />
+                          GERAR PIX DE R$ 19,90
+                        </>
+                      )}
+                    </button>
+
+                    <p className="text-center text-[10px] text-slate-400 font-semibold flex items-center justify-center gap-1">
+                      <Shield className="w-3.5 h-3.5 text-slate-400" />
+                      Seus dados de pagamento estão 100% seguros e confidenciais.
+                    </p>
+
+                  </form>
+                ) : (
+                  /* STEP 2: PIX QR CODE & COPY COPIA-E-COLA SCREEN */
+                  <div className="flex flex-col items-center gap-4 text-center">
+                    
+                    {paymentStatus === 'approved' ? (
+                      /* PAYMENT APPROVED STATE */
+                      <div className="flex flex-col items-center gap-4 py-8 w-full">
+                        <div className="w-16 h-16 bg-[#eefaf0] border-2 border-[#4cb857] rounded-full flex items-center justify-center text-[#4cb857]">
+                          <Check className="w-8 h-8 stroke-[3]" />
+                        </div>
+                        <h2 className="text-lg font-black text-[#4cb857]">PAGAMENTO CONFIRMADO!</h2>
+                        <p className="text-xs font-semibold text-[#51637c] px-4 leading-relaxed">
+                          Parabéns! O seu pagamento foi processado com sucesso. O seu acesso completo ao ZapRadar foi liberado.
+                        </p>
+                        
+                        <a
+                          href="https://www.test.com"
+                          className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-black py-4 px-8 rounded-2xl flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-all mt-4 text-sm cursor-pointer text-center"
+                        >
+                          <Unlock className="w-4 h-4" />
+                          ACESSAR ZAPRADAR AGORA
+                        </a>
+                      </div>
+                    ) : (
+                      /* PENDING PAYMENT QR CODE STATE */
+                      <div className="w-full flex flex-col items-center gap-4">
+                        
+                        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 w-full text-left">
+                          <div className="flex items-start gap-2.5">
+                            <Clock className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-xs font-bold text-amber-800">Aguardando Pagamento</h4>
+                              <p className="text-[11px] text-amber-700 leading-normal font-semibold mt-0.5">
+                                Pague o PIX dentro de <span className="font-extrabold text-[#ff5e3a]">{formatTime(timeLeft)}</span> para liberar seu acesso imediatamente.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Display QR Code */}
+                        <div className="bg-white border border-[#edf3f8] p-4 rounded-3xl shadow-sm flex flex-col items-center">
+                          {(transactionData.qr_code_base64 || transactionData.qr_code) && (
+                            <img 
+                              src={transactionData.qr_code_base64 || `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(transactionData.qr_code)}`} 
+                              alt="QR Code PIX" 
+                              className="w-44 h-44 rounded-xl"
+                              referrerPolicy="no-referrer"
+                            />
+                          )}
+                          <span className="text-[10px] text-slate-400 font-bold uppercase mt-2.5 tracking-wider">
+                            Escaneie com o app do seu banco
+                          </span>
+                        </div>
+
+                        {/* Copia e Cola box */}
+                        <div className="w-full text-left">
+                          <label className="block text-slate-500 text-xs font-bold uppercase mb-1 pl-1">Código PIX Copia e Cola</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              readOnly
+                              value={transactionData.qr_code || ''}
+                              onClick={handleCopyPIX}
+                              className="bg-white border border-[#edf3f8] rounded-2xl py-3 px-4 text-xs font-semibold flex-1 outline-none truncate text-slate-600 shadow-sm cursor-pointer"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleCopyPIX}
+                              className="bg-[#111e2e] hover:bg-slate-800 text-white font-extrabold text-xs px-4 rounded-2xl transition-all shadow-md shrink-0 cursor-pointer border-0"
+                            >
+                              {copied ? 'Copiado!' : 'Copiar'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Solid copy code button */}
+                        <button
+                          type="button"
+                          onClick={handleCopyPIX}
+                          className="w-full bg-[#111e2e] hover:bg-slate-800 text-white font-extrabold py-3.5 px-6 rounded-2xl transition-all shadow-md flex items-center justify-center gap-2 text-xs mt-1 cursor-pointer border-0"
+                        >
+                          <Check className="w-4.5 h-4.5" />
+                          COPIAR CÓDIGO PIX COMPLETO
+                        </button>
+
+                        {/* Auto recognition notice */}
+                        <div className="flex items-center gap-2 bg-[#f4faf5] border border-[#e3f4e6] py-3 px-4 rounded-2xl w-full text-left mt-1">
+                          <Loader2 className="w-4 h-4 text-[#4cb857] animate-spin shrink-0" />
+                          <span className="text-[10px] text-[#367c3f] font-bold leading-normal">
+                            O sistema detecta seu pagamento em tempo real. Após pagar, aguarde alguns segundos nesta tela.
+                          </span>
+                        </div>
+
+                        {/* Simulator block for preview testing (very professional & interactive) */}
+                        {transactionData.mock && (
+                          <div className="bg-amber-50/70 border border-dashed border-amber-300 rounded-2xl p-3.5 w-full text-left mt-2">
+                            <span className="text-[10px] font-extrabold bg-amber-500 text-white py-0.5 px-2 rounded-full uppercase tracking-wider inline-block mb-1.5">
+                              AI Studio Simulador
+                            </span>
+                            <p className="text-[11px] text-amber-800 font-semibold leading-normal mb-2">
+                              Como a API Key não está configurada no painel de segredos, geramos uma transação fictícia. Use o botão abaixo para aprovar imediatamente:
+                            </p>
+                            <button
+                              type="button"
+                              onClick={handleSimulateApproval}
+                              className="w-full bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-2.5 px-4 rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer border-0"
+                            >
+                              <Unlock className="w-3.5 h-3.5" />
+                              Simular Aprovação Instantânea
+                            </button>
+                          </div>
+                        )}
+
+                      </div>
+                    )}
+
+                  </div>
+                )}
+
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* NORMAL FLOW */
+          <>
+            {/* Dynamic header depending on the step */}
+            {step === 'results' && (
+              <header className="bg-[#141724] border-b border-[#212638] py-4 px-5 flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                <span className="text-white font-extrabold text-sm tracking-widest uppercase">🚨 RELATÓRIO SECRETO - URGENTE</span>
+              </header>
+            )}
+
+            {/* Content Wrapper with scroll ID - centered during input step to avoid blank bottom spacing */}
+            <main id="main-scroll-container" className={`flex-1 p-3.5 sm:p-5 overflow-y-auto ${step === 'input' ? 'flex flex-col justify-center min-h-[500px]' : ''}`}>
           
           {/* STEP 1: PHONE NUMBER INPUT SCREEN */}
           {step === 'input' && (
-            <div id="input-screen" className="flex flex-col items-center justify-center py-8">
+            <div id="input-screen" className="flex flex-col items-center justify-center py-2 sm:py-6">
               
-              <div className="bg-white rounded-3xl p-6 shadow-xl border border-gray-100 w-full flex flex-col items-center">
+              <div className="bg-white rounded-3xl p-4 sm:p-6 shadow-xl border border-gray-100 w-full max-w-full overflow-hidden flex flex-col items-center">
                 
                 {/* Visual Icon Header */}
-                <div className="w-20 h-20 rounded-full bg-[#f4faf5] flex items-center justify-center mb-6 relative">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#f4faf5] flex items-center justify-center mb-4 sm:mb-6 relative">
                   <div className="absolute inset-0 bg-[#59ca64] opacity-5 rounded-full animate-pulse"></div>
-                  <svg className="w-11 h-11 text-[#59ca64]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <svg className="w-9 h-9 sm:w-11 sm:h-11 text-[#59ca64]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                   </svg>
                 </div>
 
-                <h1 className="text-[#111e2e] font-extrabold text-2xl text-center leading-tight mb-2">
+                <h1 className="text-[#111e2e] font-extrabold text-xl sm:text-2xl text-center leading-tight mb-2">
                   O que seu parceiro faz no <span className="text-[#59ca64] font-black">WhatsApp?</span>
                 </h1>
 
-                <p className="text-[#707e94] text-sm text-center mb-6 leading-relaxed font-medium">
+                <p className="text-[#707e94] text-xs sm:text-sm text-center mb-4 sm:mb-6 leading-relaxed font-medium max-w-sm">
                   Insira o número que deseja espionar. Descubra mensagens, fotos e localização em tempo real.
                 </p>
 
                 <form onSubmit={handleStartAnalysis} className="w-full">
                   <div className="mb-4">
-                    <label className="text-[#73829b] text-xs font-bold tracking-wider mb-2.5 flex items-center gap-1.5">
+                    <label className="text-[#73829b] text-[10px] sm:text-xs font-bold tracking-wider mb-2.5 flex items-center gap-1.5">
                       📱 NÚMERO DO WHATSAPP
                     </label>
-                    <div className="flex">
+                    <div className="flex items-center w-full">
                       {/* Fixed prefix badge */}
-                      <div className="bg-[#f0f4f9] text-[#111e2e] font-bold py-3.5 px-4 rounded-2xl mr-2 text-base border border-[#e2e8f0] flex items-center justify-center min-w-[70px]">
+                      <div className="bg-[#f0f4f9] text-[#111e2e] font-bold py-3 px-3 sm:px-4 rounded-xl sm:rounded-2xl mr-2 text-sm sm:text-base border border-[#e2e8f0] flex items-center justify-center min-w-[55px] sm:min-w-[70px] h-11 sm:h-14">
                         +55
                       </div>
                       
@@ -300,9 +720,9 @@ export default function App() {
                         type="tel" 
                         value={phone}
                         onChange={handleInputChange}
-                        placeholder="(11) 99999-8765"
+                        placeholder="(00) 00000-0000"
                         maxLength={15}
-                        className="bg-white border border-[#e2e8f0] text-base text-[#111e2e] py-3.5 px-4 rounded-2xl flex-1 placeholder-[#a0aec0] font-semibold outline-none focus:border-[#59ca64] focus:ring-1 focus:ring-[#59ca64] transition-all shadow-sm"
+                        className="bg-white border border-[#e2e8f0] text-sm sm:text-base text-[#111e2e] py-3 px-3 sm:px-4 rounded-xl sm:rounded-2xl flex-1 placeholder-[#a0aec0] font-semibold outline-none focus:border-[#59ca64] focus:ring-1 focus:ring-[#59ca64] transition-all shadow-sm h-11 sm:h-14 min-w-0"
                         required
                       />
                     </div>
@@ -311,16 +731,16 @@ export default function App() {
                   {/* ESPIONAR AGORA Button */}
                   <button 
                     type="submit"
-                    className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-black py-4 px-6 rounded-2xl flex items-center justify-center gap-2.5 shadow-lg shadow-[#59ca64]/30 hover:shadow-xl transition-all cursor-pointer active:scale-[0.98] duration-150 mt-6 text-base"
+                    className="w-full bg-[#59ca64] hover:bg-[#4cb857] text-white font-black h-11 sm:h-14 rounded-xl sm:rounded-2xl flex items-center justify-center gap-2.5 shadow-lg shadow-[#59ca64]/30 hover:shadow-xl transition-all cursor-pointer active:scale-[0.98] duration-150 mt-5 sm:mt-6 text-sm sm:text-base"
                   >
-                    <Eye className="w-5 h-5" />
+                    <Eye className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
                     ESPIONAR AGORA
                   </button>
                 </form>
 
                 {/* Secure footer */}
-                <div className="text-[#73829b] text-xs font-semibold text-center mt-6 flex items-center justify-center gap-1.5 py-2 border-t border-gray-50 w-full">
-                  <Lock className="w-3.5 h-3.5 text-[#59ca64]" />
+                <div className="text-[#73829b] text-[10px] sm:text-xs font-semibold text-center mt-5 sm:mt-6 flex items-center justify-center gap-1.5 py-2 border-t border-gray-50 w-full">
+                  <Lock className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[#59ca64]" />
                   <span>100% anônimo • Sem rastros • Criptografado</span>
                 </div>
 
@@ -385,7 +805,7 @@ export default function App() {
 
                   {/* Phone and analyzing tag */}
                   <div className="flex-1 min-w-0">
-                    <div className="text-[#111e2e] font-extrabold text-lg truncate">
+                    <div className="text-[#111e2e] font-extrabold text-lg break-words">
                       +55 {phone || '(11) 99999-8765'}
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5">
@@ -421,7 +841,9 @@ export default function App() {
                     className="mt-0.5 w-4 h-4 accent-[#59ca64] rounded cursor-default" 
                   />
                   <p className="text-xs font-bold leading-relaxed">
-                    Investigação completa. Clique no botão acima para descobrir a verdade.
+                    {progress >= 100 
+                      ? 'Investigação completa. Clique no botão acima para descobrir a verdade.' 
+                      : 'Investigando... aguarde o processo.'}
                   </p>
                 </div>
 
@@ -522,6 +944,9 @@ export default function App() {
                 </p>
               </div>
 
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-2 md:h-3" aria-hidden="true"></div>
+
               {/* 2. Number investigated card (Image 3 middle row) */}
               <div className="bg-white rounded-3xl p-4 shadow-md border border-gray-100 flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -541,6 +966,9 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-2 md:h-3" aria-hidden="true"></div>
+
               {/* 3. Location / precision card (Image 3 bottom row) */}
               <div className="bg-[#fafbfd] border border-gray-100 rounded-3xl p-5 shadow-sm text-center">
                 <p className="text-slate-600 text-xs leading-relaxed font-bold mb-3">
@@ -554,6 +982,9 @@ export default function App() {
                   Relatório gerado em: {generationTime}
                 </div>
               </div>
+
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-2 md:h-3" aria-hidden="true"></div>
 
               {/* 4. Analysis Results (Image 4 Dark Blue panel) */}
               <div className="bg-[#181a24] rounded-3xl p-5 shadow-2xl text-slate-100 border border-[#262c3f]">
@@ -571,7 +1002,7 @@ export default function App() {
                       <MessageSquare className="w-4.5 h-4.5" />
                     </div>
                     <p className="text-xs text-slate-300 leading-normal pt-1.5">
-                      Encontramos <span className="text-red-400 font-extrabold">58</span> mensagens suspeitas no WhatsApp
+                      Encontramos <span className="text-red-400 font-extrabold">77</span> mensagens suspeitas no WhatsApp
                     </p>
                   </div>
 
@@ -669,8 +1100,8 @@ export default function App() {
 
               </div>
 
-              {/* 5. PLACE THE CHECKOUT INTERMEDIATE (Image 7 between results as requested) */}
-              <CheckoutCard />
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-3 md:h-4" aria-hidden="true"></div>
 
               {/* 6. Recupere Mensagens Excluidas (Image 5) */}
               <div className="bg-[#181a24] rounded-3xl p-5 shadow-xl text-slate-100 border border-[#262c3f]">
@@ -740,7 +1171,10 @@ export default function App() {
                   </div>
 
                   {/* Encrypted cover/Locked Overlay in the center of the chats */}
-                  <div className="absolute inset-0 bg-[#0b141a]/65 backdrop-blur-[2.5px] flex flex-col items-center justify-center p-6 text-center select-all cursor-pointer">
+                  <div 
+                    onClick={handleOpenCheckout}
+                    className="absolute inset-0 bg-[#0b141a]/65 backdrop-blur-[2.5px] flex flex-col items-center justify-center p-6 text-center select-all cursor-pointer hover:bg-[#0b141a]/70 active:scale-[0.99] transition-all duration-200"
+                  >
                     <div className="bg-[#202c33]/90 border border-[#2d383e] p-5 rounded-2xl shadow-xl flex flex-col items-center max-w-[240px]">
                       <div className="w-11 h-11 bg-red-500/10 border border-red-500/20 rounded-full flex items-center justify-center mb-3 text-red-400">
                         <Lock className="w-5.5 h-5.5 stroke-[2.5]" />
@@ -768,6 +1202,9 @@ export default function App() {
 
               </div>
 
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-3 md:h-4" aria-hidden="true"></div>
+
               {/* 7. Fotos Privadas Interceptadas (Image 6) */}
               <div className="bg-[#181a24] rounded-3xl p-5 shadow-xl text-slate-100 border border-[#262c3f]">
                 
@@ -786,7 +1223,10 @@ export default function App() {
                 </p>
 
                 {/* Grid layout with blurred mock-suggestive files */}
-                <div className="grid grid-cols-3 gap-2.5 relative select-none">
+                <div 
+                  onClick={handleOpenCheckout}
+                  className="grid grid-cols-3 gap-2.5 relative select-none cursor-pointer hover:opacity-95 active:scale-[0.99] transition-all duration-200"
+                >
                   
                   {/* Column Left (Main square) */}
                   <div className="col-span-2 aspect-square rounded-2xl bg-slate-900 border border-[#2c344a] overflow-hidden relative">
@@ -832,6 +1272,9 @@ export default function App() {
 
               </div>
 
+              {/* Espaçador de layout para dar respiro visual */}
+              <div className="h-4 md:h-6" aria-hidden="true"></div>
+
               {/* 8. SECOND INSTANCE OF CHECKOUT CARD FOR EASY ACCESSIBILITY */}
               <CheckoutCard />
 
@@ -846,6 +1289,8 @@ export default function App() {
             © 2026 ZapRadar • Todos os direitos reservados
           </p>
         </footer>
+      </>
+    )}
 
       </div>
 
