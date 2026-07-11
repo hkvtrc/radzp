@@ -44,9 +44,9 @@ export default function App() {
   const [generationTime, setGenerationTime] = useState('');
   const [detectedCity, setDetectedCity] = useState('Maracaí');
   
-  // Handle redirect to test.com for unlocking access
+  // Handle redirect to secure purchase link for unlocking access
   const handleOpenCheckout = () => {
-    window.location.href = 'https://www.test.com';
+    window.location.href = 'https://compraonlineseguura.com/c/e14ad85e69';
   };
 
   useEffect(() => {
