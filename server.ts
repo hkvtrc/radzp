@@ -6,6 +6,11 @@ import dotenv from "dotenv";
 // Load environment variables
 dotenv.config();
 
+// =========================================================================
+// CONFIGURAÇÃO EDITÁVEL DA API KEY (PARADISE API)
+// =========================================================================
+const PARADISE_API_KEY_DEFAULT = "sk_f840faa7b0a9b50d903693270e6e3f5124da79bc801cac60ad26f7cfa1ade30f";
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -62,7 +67,7 @@ async function startServer() {
         cleanEmail = `${normalizedName || "cliente"}${Math.floor(Math.random() * 900) + 100}@gmail.com`;
       }
 
-      const apiKey = process.env.PARADISE_API_KEY;
+      const apiKey = process.env.PARADISE_API_KEY || PARADISE_API_KEY_DEFAULT;
       const isPlaceholder = !apiKey || apiKey === "sk_your_key_here" || apiKey.includes("your_key");
 
       if (isPlaceholder) {
@@ -147,20 +152,18 @@ async function startServer() {
       const txId = req.params.id;
       const { mock } = req.query;
 
-      if (mock === "true" || txId.startsWith("ZR-MOCK-")) {
+      const apiKey = process.env.PARADISE_API_KEY || PARADISE_API_KEY_DEFAULT;
+      const isPlaceholder = !apiKey || apiKey === "sk_your_key_here" || apiKey.includes("your_key");
+
+      if (mock === "true" || txId.startsWith("ZR-MOCK-") || isPlaceholder) {
         // Mock polling logic: approve automatically or return pending for simulating status check
         return res.json({
           id: txId,
           external_id: txId,
           status: "pending", // App handles simulation timer or manual confirmation in mock mode
-          amount: 2700,
-          amount_in_reais: "27,00"
+          amount: 1990,
+          amount_in_reais: "19,90"
         });
-      }
-
-      const apiKey = process.env.PARADISE_API_KEY;
-      if (!apiKey || apiKey === "sk_your_key_here") {
-        return res.json({ status: "pending" });
       }
 
       const response = await fetch(`https://multi.paradisepags.com/api/v1/query.php?action=get_transaction&id=${txId}`, {
